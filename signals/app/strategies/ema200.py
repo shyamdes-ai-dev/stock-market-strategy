@@ -3,7 +3,7 @@ from .base import Strategy
 class Ema200Breakout(Strategy):
     name = "ema200_breakout"
 
-    def __init__(self, period=200, hold=5, sl_days=5):
+    def __init__(self, period=200, hold=7, sl_days=7):
         self.period, self.hold, self.sl_days = period, hold, sl_days
         self.warmup = period
 
