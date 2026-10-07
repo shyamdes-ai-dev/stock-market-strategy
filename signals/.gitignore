@@ -1,0 +1,4 @@
+.env
+signals.db
+__pycache__/
+docs/

@@ -1,0 +1,92 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Signals</title><style>
+:root{--bg:#fff;--fg:#1a1a1a;--mut:#777;--bd:#e3e3e3;--g:#0a8f4d;--r:#d23}
+@media(prefers-color-scheme:dark){:root{--bg:#14161a;--fg:#eee;--mut:#999;--bd:#2c2f36;--g:#3ddc84;--r:#ff6b6b}}
+body{font:14px system-ui,sans-serif;background:var(--bg);color:var(--fg);padding:20px;max-width:1200px;margin:auto}
+.bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.cards{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0}.c{border:1px solid var(--bd);border-radius:8px;padding:10px 14px}
+.c b{display:block;font-size:20px}.c span{color:var(--mut);font-size:12px}
+select,input,button{background:var(--bg);color:var(--fg);border:1px solid var(--bd);border-radius:6px;padding:6px}
+button.on{border-color:var(--fg);font-weight:600}
+.t{overflow-x:auto}table{border-collapse:collapse;width:100%}th,td{padding:8px;border-bottom:1px solid var(--bd);text-align:left;white-space:nowrap}
+th{color:var(--mut);font-weight:500;cursor:pointer;user-select:none}.g{color:var(--g)}.r{color:var(--r)}a{color:inherit}.m{color:var(--mut)}
+</style></head><body><h2>Trade signals</h2>
+<div class=bar><select id=s></select><select id=st><option value="">All status</option><option>open</option><option>closed</option></select>
+<select id=p><option value="">All history</option><option value=1>Last 1 year</option><option value=2>Last 2 years</option><option value=3>Last 3 years</option><option value=5>Last 5 years</option><option value=c>Custom…</option></select>
+<span id=cu style="display:none"><input type=date id=f> to <input type=date id=t></span>
+<input id=q placeholder="Search stock…"><a id=csv href="#" download>⬇ Download CSV</a></div>
+<div class=cards id=cards></div>
+<div class=bar style="margin-bottom:8px"><button id=v_trades class=on>All trades</button><button id=v_stocks>By stock</button><button id=v_watch>Watchlist (forming)</button><button id=v_charts>Charts</button><span class=m id=n></span></div>
+<div id=charts class=cards style="display:none"></div><div class=t id=tw><table><thead><tr id=h></tr></thead><tbody id=b></tbody></table></div>
+<script>
+const $=i=>document.getElementById(i);
+const pct=v=>v+'%',px=v=>v.toFixed(2),sym=v=>`<a target=_blank href="https://www.tradingview.com/chart/?symbol=${v.endsWith('.BO')?'BSE:'+v.slice(0,-3):'NSE:'+v}">${v}</a>`;
+// [key,label,formatter,colorBySign]
+const COLS={trades:[['symbol','Symbol',sym],['cross_date','EMA cross'],['signal_date','Signal (entry)'],['entry_price','Entry',px],['exit_date','Exit date'],['exit_price','Exit',px],['exit_reason','Reason'],['ret_pct','Return',pct,1],['peak_pct','Peak gain',pct,1],['peak_price','Peak price',px],['peak_date','Peak date'],['days_to_peak','Days to peak'],['days_held','Days'],['status','Status']],
+ stocks:[['symbol','Symbol',sym],['patterns','Patterns'],['closed','Closed'],['open','Open'],['wins','Wins'],['success_pct','Success ratio',pct],['avg_ret_pct','Avg return',pct,1],['total_ret_pct','Total return',pct,1],['avg_peak_pct','Avg peak gain',pct,1],['best_peak_pct','Best peak gain',pct,1],['data_from','Data from'],['signals_from','Signals possible from']]};
+COLS.watch=[['symbol','Symbol',sym],['days_left','Triggers in',v=>v===1?'Tomorrow':v+' days'],['days_confirmed','Days confirmed'],['cross_date','EMA cross'],['last_close','Last close',px],['ema','200 EMA',px],['cushion_pct','Cushion above EMA',pct],['last_date','Data as of'],['chart','Chart',v=>`<a target=_blank href="${v}">view</a>`]];
+let view='trades',rows=[],sort={k:'signal_date',d:-1};
+function qs(){const p=new URLSearchParams({strategy:$('s').value,status:$('st').value});const y=$('p').value;
+ if(y==='c'){if($('f').value)p.set('since',$('f').value);if($('t').value)p.set('until',$('t').value)}else if(y)p.set('years',y);return p}
+let DATA=null;
+const avg=a=>a.length?a.reduce((x,y)=>x+y,0)/a.length:0,r2=v=>Math.round(v*100)/100,r1=v=>Math.round(v*10)/10,sum=a=>a.reduce((x,y)=>x+y,0),
+ med=a=>{if(!a.length)return 0;a=[...a].sort((x,y)=>x-y);const m=a.length>>1;return a.length%2?a[m]:(a[m-1]+a[m])/2};
+async function api(kind,p){ // live server -> /api ; static (GitHub Pages) -> computed in the browser from data.json
+ if(!window.STATIC)return (await fetch(`/api/${kind}?`+p)).json();
+ DATA=DATA||await (await fetch('data/data.json')).json();
+ const q=new URLSearchParams(p),s=q.get('strategy'),y=q.get('years');let since=q.get('since'),until=q.get('until');
+ if(y){const d=new Date();d.setDate(d.getDate()-Math.round(365.25*y));since=d.toISOString().slice(0,10)}
+ if(kind==='strategies')return DATA.strategies;
+ if(kind==='watch')return DATA.watch.filter(x=>x.strategy===s);
+ const t=DATA.trades.filter(x=>x.strategy===s&&(!since||x.signal_date>=since)&&(!until||x.signal_date<=until)),cl=t.filter(x=>x.status==='closed'),pk=a=>a.map(x=>x.peak_pct).filter(v=>v!=null);
+ if(kind==='trades')return q.get('status')?t.filter(x=>x.status===q.get('status')):t;
+ if(kind==='summary'){const r=cl.map(x=>x.ret_pct),k=pk(cl);return{closed:cl.length,open:t.length-cl.length,win_rate:r1(100*r.filter(v=>v>0).length/(r.length||1)),total_ret_pct:r2(sum(r)),avg_ret_pct:r2(avg(r)),median_ret_pct:r2(med(r)),avg_peak_pct:r2(avg(k)),median_peak_pct:r2(med(k)),pct_peak_10:r1(100*k.filter(v=>v>=10).length/(k.length||1)),best:r.length?Math.max(...r):0,worst:r.length?Math.min(...r):0,avg_days:Math.round(avg(cl.map(x=>x.days_held)))}}
+ return DATA.stocks.map(st=>{const a=t.filter(x=>x.symbol===st.symbol),c=a.filter(x=>x.status==='closed'),r=c.map(x=>x.ret_pct),k=pk(c),w=r.filter(v=>v>0).length;
+  return{symbol:st.symbol,patterns:a.length,closed:c.length,open:a.length-c.length,wins:w,success_pct:c.length?r1(100*w/c.length):null,avg_ret_pct:c.length?r2(avg(r)):null,total_ret_pct:c.length?r2(sum(r)):null,avg_peak_pct:k.length?r2(avg(k)):null,best_peak_pct:k.length?Math.max(...k):null,data_from:st.first_date,signals_from:st.eligible_from}})}
+function csv(u,p){const a=$('csv');if(!window.STATIC){a.href=`/api/${u}.csv?`+p;return}
+ const C=COLS[u],e=v=>v==null?'':/[",\n]/.test(v)?'"'+String(v).replace(/"/g,'""')+'"':v;
+ a.href=URL.createObjectURL(new Blob([[C.map(c=>c[0]).join(','),...rows.map(x=>C.map(c=>e(x[c[0]])).join(','))].join('\n')],{type:'text/csv'}));a.download=u+'.csv'}
+async function load(){const p=qs(),u=view==='charts'?'trades':view;
+ const sm=await api('summary',p);
+ $('cards').innerHTML=[['Closed',sm.closed],['Open',sm.open],['Win rate',sm.win_rate+'%'],['Total return (sum of trades)',sm.total_ret_pct+'%'],['Avg per trade',sm.avg_ret_pct+'%'],['Median return',sm.median_ret_pct+'%'],['Avg peak gain',sm.avg_peak_pct+'%'],['Median peak gain',sm.median_peak_pct+'%'],['Peak ≥ 10%',sm.pct_peak_10+'% of trades'],['Best',sm.best+'%'],['Worst',sm.worst+'%'],['Avg days',sm.avg_days]]
+  .map(([k,v])=>`<div class=c><b>${v}</b><span>${k}</span></div>`).join('');
+ rows=await api(u,p);csv(u,p);draw()}
+const svg=s=>`<svg viewBox="0 0 520 270" width="100%">${s}</svg>`,tx=(x,y,t)=>`<text x="${x}" y="${y}" font-size="9" fill="var(--mut)" text-anchor="middle">${t}</text>`;
+const card=(t,s,b)=>`<div class=c style="flex:1 1 400px"><b style="font-size:15px">${t}</b><span style="display:block;margin-bottom:6px">${s}</span>${b}</div>`;
+function hist(r){const lo=-20,hi=60,w=5,nb=(hi-lo)/w,bins=Array(nb+2).fill(0);
+ r.forEach(x=>{const v=x.ret_pct;bins[v<lo?0:v>=hi?nb+1:Math.floor((v-lo)/w)+1]++});
+ const m=Math.max(...bins,1),bw=480/bins.length;let o='';
+ bins.forEach((n,i)=>{const a=i===0?'<'+lo:i===nb+1?'≥'+hi:lo+(i-1)*w,h=n/m*200,x=30+i*bw;
+  o+=`<rect x="${x+1}" y="${225-h}" width="${bw-2}" height="${h}" fill="var(${(i===0?lo-1:i===nb+1?hi:lo+(i-1)*w)>=0?'--g':'--r'})" opacity=".8"><title>${a}%: ${n} trades</title></rect>`;
+  if(i%2===0)o+=tx(x+bw/2,242,a)});
+ return svg(o+tx(270,262,'Return % (5% buckets)')+tx(14,20,m)+`<line x1="30" x2="510" y1="225" y2="225" stroke="var(--bd)"/>`)}
+function scat(r){const k=Math.ceil(r.length/4000),X=v=>30+Math.min(Math.max(v,0),100)/100*480,Y=v=>225-(Math.min(Math.max(v,-30),100)+30)/130*205;
+ let o=`<line x1="30" x2="510" y1="${Y(0)}" y2="${Y(0)}" stroke="var(--bd)"/><line x1="${X(0)}" y1="${Y(0)}" x2="${X(100)}" y2="${Y(100)}" stroke="var(--mut)" stroke-dasharray="4"/>`;
+ r.filter((x,i)=>x.peak_pct!=null&&i%k===0).forEach(x=>o+=`<circle cx="${X(x.peak_pct)}" cy="${Y(x.ret_pct)}" r="2" fill="var(${x.ret_pct>0?'--g':'--r'})" opacity=".35"><title>${x.symbol} ${x.signal_date}: peak ${x.peak_pct}%, result ${x.ret_pct}%</title></circle>`);
+ [0,25,50,75,100].forEach(v=>o+=tx(X(v),240,v));[-30,0,50,100].forEach(v=>o+=tx(22,Y(v)+3,v));
+ return svg(o+tx(270,262,'Peak gain % (highest price reached)')+tx(10,12,'Return %'))}
+function monthly(all){const g={};all.forEach(x=>{const m=x.signal_date.slice(0,7);(g[m]=g[m]||[]).push(x)});
+ const ms=Object.keys(g).sort(),mx=Math.max(...ms.map(m=>g[m].length),1),bw=480/Math.max(ms.length,1),st=Math.ceil(ms.length/8);let o='';
+ ms.forEach((m,i)=>{const c=g[m].filter(x=>x.status==='closed'),av=c.length?c.reduce((a,x)=>a+x.ret_pct,0)/c.length:0,h=g[m].length/mx*200;
+  o+=`<rect x="${30+i*bw+.5}" y="${225-h}" width="${Math.max(bw-1,1)}" height="${h}" fill="var(${av>=0?'--g':'--r'})" opacity=".8"><title>${m}: ${g[m].length} signals, avg return ${av.toFixed(1)}%</title></rect>`;
+  if(i%st===0)o+=tx(30+i*bw+bw/2,242,m)});
+ return svg(o+tx(14,20,mx)+tx(270,262,'Signal month')+`<line x1="30" x2="510" y1="225" y2="225" stroke="var(--bd)"/>`)}
+function drawCharts(){const q=$('q').value.toUpperCase(),all=rows.filter(x=>x.symbol.includes(q)),r=all.filter(x=>x.status==='closed');
+ $('charts').innerHTML=r.length?card('Return distribution',r.length+' closed trades: how often each result happens',hist(r))
+  +card('Peak gain vs actual return','Dots near the dashed line kept their peak; dots far below gave it back',scat(r))
+  +card('Signals per month','Bar colour = average return of that month’s closed trades',monthly(all)):'<div class=m>No closed trades in this selection.</div>';
+ $('n').textContent=r.length+' closed trades'}
+function draw(){$('tw').style.display=view==='charts'?'none':'';$('charts').style.display=view==='charts'?'flex':'none';if(view==='charts')return drawCharts();const q=$('q').value.toUpperCase(),C=COLS[view],k=sort.k;
+ const r=rows.filter(x=>x.symbol.includes(q)&&(view!=='stocks'||q||x.patterns>0));
+ r.sort((a,b)=>{const x=a[k],y=b[k];if(x==null)return 1;if(y==null)return -1;return(x>y?1:x<y?-1:0)*sort.d});
+ $('h').innerHTML=C.map(c=>`<th data-k=${c[0]}>${c[1]}${k===c[0]?(sort.d>0?' ▲':' ▼'):''}</th>`).join('');
+ $('b').innerHTML=r.map(x=>'<tr>'+C.map(c=>{const v=x[c[0]],o=v==null?'-':c[2]?c[2](v):v;return `<td${c[3]&&v!=null?` class=${v>=0?'g':'r'}`:''}>${o}</td>`}).join('')+'</tr>').join('');
+ $('n').textContent=r.length+' rows'+(view==='stocks'&&!q?' (stocks with ≥1 pattern; search a name to see any stock)':'')}
+function setView(v){view=v;sort={trades:{k:'signal_date',d:-1},stocks:{k:'patterns',d:-1},watch:{k:'days_left',d:1},charts:{k:'signal_date',d:-1}}[v];
+ ['trades','stocks','watch','charts'].forEach(x=>$('v_'+x).className=v===x?'on':'');load()}
+$('h').onclick=e=>{const k=e.target.dataset.k;if(!k)return;sort={k,d:sort.k===k?-sort.d:-1};draw()};
+$('v_trades').onclick=()=>setView('trades');$('v_stocks').onclick=()=>setView('stocks');$('v_watch').onclick=()=>setView('watch');$('v_charts').onclick=()=>setView('charts');
+(async()=>{const l=await api('strategies','');$('s').innerHTML=l.map(x=>`<option>${x}</option>`).join('');
+ $('s').onchange=$('st').onchange=$('f').onchange=$('t').onchange=load;$('q').oninput=draw;
+ $('p').onchange=()=>{$('cu').style.display=$('p').value==='c'?'inline':'none';load()};load()})();
+</script></body></html>
